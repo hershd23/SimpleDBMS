@@ -105,13 +105,23 @@ public class JoinOptimizer {
         if (j instanceof LogicalSubplanJoinNode) {
             // A LogicalSubplanJoinNode represents a subquery.
             // You do not need to implement proper support for these for Lab 3.
+
+            // Config 1: Return cost1 + cost2 + card1
             return card1 + cost1 + cost2;
+
+            // Config 2: Return log(card1) + cost1 + cost2
+            //return Math.log(card1) + cost1 + cost2;
         } else {
             // Insert your code here.
             // HINT: You may need to use the variable "j" if you implemented
             // a join algorithm that's more complicated than a basic
             // nested-loops join.
+
+            // Config 1: Return cost1 + card1 * cost2 + card1 * card2
             return cost1 + card1 * cost2 + card1 * card2;
+
+            // Config 2: Return log(card1) + log(card2) + cost1 + cost2
+            //return Math.log(card1) + Math.log(card1)*cost2 + Math.log(card2)*cost1;
         }
     }
 
@@ -164,6 +174,10 @@ public class JoinOptimizer {
                 return card1;
             }
         } else {
+            // Config 2: return square root of the product of the cardinalities
+            //return (int) Math.sqrt(card1 * card2);
+
+            // Config 1: Return 30% of the product of the estimates of the LHS and RHS
             return (int) (card1 * card2 * 0.3);
         }
     }
@@ -223,10 +237,19 @@ public class JoinOptimizer {
      */
     public Vector<LogicalJoinNode> orderJoins(
             HashMap<String, TableStats> stats,
-            HashMap<String, Double> filterSelectivities, boolean explain)
+            HashMap<String, Double> filterSelectivities, boolean explain, String type)
             throws ParsingException {
 
+        if(type == "random"){
+            System.out.println("RANDOM ORDERING");
+            return randomizedJoinOrdering(stats, filterSelectivities);
+        }
+
+        System.out.println("SELLINGER ORDERING");
+        
         PlanCache pc = new PlanCache();
+
+        long startTime = System.nanoTime();
         for (int i = 1; i <= this.joins.size(); i++) {
             for (Set<LogicalJoinNode> s : enumerateSubsets(this.joins, i)) {
                 CostCard bestPlan = null;
@@ -242,10 +265,67 @@ public class JoinOptimizer {
                 }
             }
         }
+        long endTime = System.nanoTime();
+        long durationInNanoseconds = endTime - startTime;
+        long durationInMilliseconds = durationInNanoseconds / 1_000_000;
+        System.out.println("Time taken: " + durationInNanoseconds + " ns");
+        System.out.println("Time taken: " + durationInMilliseconds + " ms");
+
+
         if (explain) {
             printJoins(pc.getOrder(new HashSet<>(this.joins)), pc, stats, filterSelectivities);
         }
         return pc.getOrder(new HashSet<>(this.joins));
+    }
+
+    public Vector<LogicalJoinNode> randomizedJoinOrdering(
+        HashMap<String, TableStats> stats,
+        HashMap<String, Double> filterSelectivities) throws ParsingException {
+    
+        Vector<LogicalJoinNode> bestOrder = null;
+        double bestCost = Double.MAX_VALUE;
+
+        for (int i = 0; i < 100; i++) {
+            Vector<LogicalJoinNode> order = generateRandomJoinOrder();
+            double cost = evaluateJoinOrder(order, stats, filterSelectivities);
+            if (cost < bestCost) {
+                bestCost = cost;
+                bestOrder = order;
+            }
+        }
+
+        return bestOrder;
+    }
+
+    private Vector<LogicalJoinNode> generateRandomJoinOrder() {
+        Vector<LogicalJoinNode> order = new Vector<>(this.joins);
+        Collections.shuffle(order);
+        return order;
+    }
+
+    private double evaluateJoinOrder(Vector<LogicalJoinNode> order,
+            HashMap<String, TableStats> stats,
+            HashMap<String, Double> filterSelectivities) throws ParsingException {
+        double cost = 0;
+        int currentCard = 0;
+
+        for (int i = 0; i < order.size(); i++) {
+            LogicalJoinNode node = order.get(i);
+            String table1Name = Database.getCatalog().getTableName(this.p.getTableId(node.t1Alias));
+            String table2Name = Database.getCatalog().getTableName(this.p.getTableId(node.t2Alias));
+
+            int card1 = (i == 0) ? stats.get(table1Name).estimateTableCardinality(filterSelectivities.get(node.t1Alias)) : currentCard;
+            int card2 = stats.get(table2Name).estimateTableCardinality(filterSelectivities.get(node.t2Alias));
+
+            double joinCost = estimateJoinCost(node, card1, card2, 
+                (i == 0) ? stats.get(table1Name).estimateScanCost() : cost, 
+                stats.get(table2Name).estimateScanCost());
+
+            cost += joinCost;
+            currentCard = estimateJoinCardinality(node, card1, card2, false, false, stats);
+        }
+
+        return cost;
     }
 
     // ===================== Private Methods =================================
